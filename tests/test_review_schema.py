@@ -88,7 +88,7 @@ def test_invalid_category_is_rejected(bad_category: object) -> None:
 # --- Line number ------------------------------------------------------------
 
 
-@pytest.mark.parametrize("bad_line", [0, -1, "twelve", None, 1.5])
+@pytest.mark.parametrize("bad_line", [0, -1, "twelve", 1.5])
 def test_invalid_line_number_is_rejected(bad_line: object) -> None:
     with pytest.raises(ValidationError):
         ReviewIssue.model_validate(with_override(VALID_ISSUE, line_number=bad_line))
@@ -98,6 +98,28 @@ def test_first_line_is_line_one() -> None:
     issue = ReviewIssue.model_validate(with_override(VALID_ISSUE, line_number=1))
 
     assert issue.line_number == 1
+
+
+def test_null_line_number_is_valid() -> None:
+    """Issues about the code as a whole have no single line to point at."""
+    issue = ReviewIssue.model_validate(with_override(VALID_ISSUE, line_number=None))
+
+    assert issue.line_number is None
+
+
+def test_null_line_number_survives_json_round_trip() -> None:
+    issue = ReviewIssue.model_validate(with_override(VALID_ISSUE, line_number=None))
+
+    assert json.loads(issue.model_dump_json())["line_number"] is None
+    assert ReviewIssue.model_validate_json(issue.model_dump_json()) == issue
+
+
+def test_line_number_is_nullable_but_still_required_in_schema() -> None:
+    """Strict mode needs every key present; "no line" must be an explicit null."""
+    schema = ReviewIssue.model_json_schema()
+
+    assert "line_number" in schema["required"]
+    assert {"type": "null"} in schema["properties"]["line_number"]["anyOf"]
 
 
 # --- Text fields ------------------------------------------------------------

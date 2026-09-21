@@ -9,8 +9,14 @@ stays in sync.
 """
 
 from enum import StrEnum
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+
+# Upper bound on submitted code. Without one, a single request could send
+# megabytes to a paid API. 20k characters is roughly 5k tokens: enough for a
+# sizeable file, small enough to keep cost and latency predictable.
+MAX_CODE_CHARS = 20_000
 
 
 class Severity(StrEnum):
@@ -64,11 +70,16 @@ class ReviewIssue(_StrictModel):
     category: Category = Field(
         description="The kind of issue: bug, security, performance or style."
     )
-    line_number: int = Field(
+    # Required-but-nullable, NOT `= None`: OpenAI strict mode demands every
+    # property appear in `required`, so "no line" must be an explicit null
+    # from the model rather than an omitted key.
+    line_number: int | None = Field(
         ge=1,
         description=(
-            "1-based line number in the submitted code where the issue "
-            "occurs (the first line of the code is line 1)."
+            "1-based line number where the issue occurs, read from the "
+            "'N: ' prefix on each line of the submitted code. Use null when "
+            "the issue is not tied to a single line (for example, a problem "
+            "with the code as a whole)."
         ),
     )
     description: str = Field(
@@ -99,3 +110,32 @@ class ReviewResponse(_StrictModel):
         min_length=1,
         description="A one-to-three sentence overall assessment of the code.",
     )
+
+
+class ReviewRequest(BaseModel):
+    """The input to POST /review: code to review plus a language hint."""
+
+    # Deliberately NOT _StrictModel: str_strip_whitespace would strip the
+    # indentation off the first line of the code and shift how it looks to the
+    # model. `code` must reach the reviewer byte-for-byte; only `language`
+    # (a short label) is stripped, via its own constraint below.
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(
+        min_length=1,
+        max_length=MAX_CODE_CHARS,
+        description="The source code to review, as raw text.",
+    )
+    language: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)
+    ] = Field(
+        description="Programming language of the code, e.g. 'python'. A hint only."
+    )
+
+    @field_validator("code")
+    @classmethod
+    def code_must_not_be_blank(cls, value: str) -> str:
+        """Reject whitespace-only code without altering the code itself."""
+        if not value.strip():
+            raise ValueError("code must contain something other than whitespace")
+        return value
