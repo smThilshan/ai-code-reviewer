@@ -22,12 +22,26 @@ from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-limiter = Limiter(key_func=get_remote_address)
+# headers_enabled adds X-RateLimit-Limit/Remaining/Reset and, on a 429,
+# Retry-After to every rate-limited response. Without it a client (our own
+# Phase 8 frontend, or anyone else) can only learn it was throttled from the
+# message text; with it, it can show "try again in N seconds" or back off
+# automatically instead of guessing or polling.
+limiter = Limiter(key_func=get_remote_address, headers_enabled=True)
 
 
 def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
-    """Return 429 in the same {"detail": ...} shape as the API's other errors."""
-    return JSONResponse(
+    """Return 429 in the same {"detail": ...} shape as the API's other errors.
+
+    slowapi's own default handler returns {"error": ...} instead, which would
+    be the one inconsistent error shape in the API, so we replace it with
+    this one but still delegate to its `_inject_headers` for the
+    Retry-After/X-RateLimit-* headers rather than re-deriving them.
+    """
+    response = JSONResponse(
         status_code=429,
         content={"detail": f"Rate limit exceeded: {exc.detail}. Try again later."},
+    )
+    return request.app.state.limiter._inject_headers(  # noqa: SLF001 - slowapi's own handler does the same
+        response, request.state.view_rate_limit
     )

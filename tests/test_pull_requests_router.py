@@ -153,7 +153,9 @@ def test_review_pr_has_its_own_tighter_rate_limit(client: TestClient) -> None:
 
 def test_review_and_review_pr_have_independent_rate_limit_counters(client: TestClient) -> None:
     class OkReviewService:
-        async def review_code(self, code: str, language: str) -> ReviewResponse:
+        async def review_code(
+            self, code: str, language: str | None = None, filename: str | None = None
+        ) -> ReviewResponse:
             return ReviewResponse(issues=[], summary="fine")
 
     use_service(FakePRService())

@@ -19,9 +19,30 @@ package = false
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "ruff>=0.16.8",
 ]
 
 [tool.pytest.ini_options]
 # Put the project root on sys.path so tests can `import app...`.
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# Kept deliberately narrow: unused/undefined names, import hygiene, and a few
+# correctness checks (bugbear) — not a full style rewrite. A wide ruleset
+# turned on at the end of a project just produces noise to wade through.
+select = ["F", "E", "I", "B", "UP"]
+ignore = [
+    "E501",  # line length: real diffs, printf-style tables and long strings
+             # trip this constantly; readability isn't hurt enough to fight it.
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test/eval fakes intentionally use loose signatures (untyped, **kwargs-like
+# stand-ins for the real service) to keep test setup short.
+"tests/*" = ["B008"]
+"evals/*" = ["B008"]

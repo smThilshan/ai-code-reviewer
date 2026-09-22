@@ -26,8 +26,9 @@ from app.services.exceptions import (
     LLMTimeoutError,
     LLMUnavailableError,
 )
+from app.services.languages import resolve_language
 from app.services.line_numbering import NumberedLine, number_lines
-from app.services.prompts import SYSTEM_PROMPT, build_user_message
+from app.services.prompts import build_system_prompt, build_user_message
 
 logger = logging.getLogger(__name__)
 
@@ -46,20 +47,27 @@ class ReviewService:
         self._client = client
         self._model = model
 
-    async def review_code(self, code: str, language: str) -> ReviewResponse:
+    async def review_code(
+        self, code: str, language: str | None = None, filename: str | None = None
+    ) -> ReviewResponse:
         """Review a whole piece of code; line numbers count from 1.
+
+        The language comes from `language` if given, else from `filename`'s
+        extension, else the model is asked to identify it.
 
         Raises:
             LLMTimeoutError: the API did not respond in time.
             LLMUnavailableError: the API call failed.
             LLMResponseError: the API responded with an unusable result.
         """
-        return await self.review_lines(number_lines(code), language)
+        return await self.review_lines(
+            number_lines(code), resolve_language(language, filename)
+        )
 
     async def review_lines(
         self,
         lines: Sequence[NumberedLine],
-        language: str,
+        language: str | None,
         *,
         excerpt: bool = False,
     ) -> ReviewResponse:
@@ -76,7 +84,7 @@ class ReviewService:
         Raises: the same errors as `review_code`.
         """
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": build_system_prompt(language)},
             {"role": "user", "content": build_user_message(lines, language, excerpt=excerpt)},
         ]
 
@@ -133,33 +141,49 @@ class ReviewService:
             ) from exc
 
         review = self._validate(completion)
-        return self._null_unknown_line_numbers(review, {line.number for line in lines})
+        return self._enforce_line_rules(review, lines)
 
     @staticmethod
-    def _null_unknown_line_numbers(
-        review: ReviewResponse, valid_lines: set[int]
+    def _enforce_line_rules(
+        review: ReviewResponse, lines: Sequence[NumberedLine]
     ) -> ReviewResponse:
-        """Replace any line number the model was never shown with null.
+        """Make the model's line numbers agree with what it was actually shown.
 
-        The schema can only say "an integer >= 1"; it can't know how long
-        this particular code is. Models occasionally cite a line past the end
-        (or, for a PR excerpt, a line in a gap they weren't shown). Passing
-        that through would point a reader at the wrong code, whereas null
-        honestly says "not tied to a specific line", which the contract
-        already allows. The issue itself is kept: the problem may be real
-        even if the model mislocated it.
+        The prompt *asks* the model to behave; this *guarantees* it. Two rules:
+
+        1. An issue on a read-only context line is dropped. Context is shown
+           only for understanding, so a finding there is about code the pull
+           request didn't touch, which is out of scope. (Dropped, not nulled:
+           nulling would keep a finding about unchanged code.)
+        2. A line number the model was never shown becomes null. The schema
+           can only say "an integer >= 1"; it can't know how long this code
+           is. Models occasionally cite a line past the end, or one in a gap.
+           That would point a reader at the wrong code, whereas null honestly
+           says "not tied to a specific line", which the contract allows. The
+           issue itself is kept: the problem may be real though mislocated.
+
+        Whole-file review has no context lines, so only rule 2 applies there.
         """
-        issues = []
+        shown = {line.number for line in lines}
+        context = {line.number for line in lines if line.context}
+
+        kept = []
         for issue in review.issues:
-            if issue.line_number is not None and issue.line_number not in valid_lines:
+            number = issue.line_number
+            if number in context:
+                logger.warning(
+                    "Model reported an issue on read-only context line %s; dropping it", number
+                )
+                continue
+            if number is not None and number not in shown:
                 logger.warning(
                     "Model cited line %s, which was not in the submitted code; "
                     "setting line_number to null",
-                    issue.line_number,
+                    number,
                 )
                 issue = issue.model_copy(update={"line_number": None})
-            issues.append(issue)
-        return review.model_copy(update={"issues": issues})
+            kept.append(issue)
+        return review.model_copy(update={"issues": kept})
 
     @staticmethod
     def _validate(completion: ParsedChatCompletion[ReviewResponse]) -> ReviewResponse:

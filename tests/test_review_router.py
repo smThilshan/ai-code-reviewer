@@ -45,8 +45,10 @@ class FakeService:
         self.error = error
         self.calls: list[dict[str, str]] = []
 
-    async def review_code(self, code: str, language: str) -> ReviewResponse:
-        self.calls.append({"code": code, "language": language})
+    async def review_code(
+        self, code: str, language: str | None = None, filename: str | None = None
+    ) -> ReviewResponse:
+        self.calls.append({"code": code, "language": language, "filename": filename})
         if self.error:
             raise self.error
         return CANNED_REVIEW
@@ -86,7 +88,7 @@ def test_code_reaches_the_service_unmodified(client: TestClient) -> None:
 
     client.post("/review", json={"code": code, "language": "  python  "})
 
-    assert service.calls == [{"code": code, "language": "python"}]
+    assert service.calls == [{"code": code, "language": "python", "filename": None}]
 
 
 # --- Input validation -------------------------------------------------------
@@ -99,7 +101,8 @@ def test_code_reaches_the_service_unmodified(client: TestClient) -> None:
         {"code": "   \n\t ", "language": "python"},
         {"code": "x = 1", "language": ""},
         {"code": "x = 1", "language": "   "},
-        {"code": "x = 1"},
+        {"code": "x = 1", "filename": ""},
+        {"code": "x = 1", "filename": "f" * 261},
         {"language": "python"},
         {"code": "x = 1", "language": "python", "extra": "nope"},
         {"code": "x" * (MAX_CODE_CHARS + 1), "language": "python"},
@@ -110,7 +113,8 @@ def test_code_reaches_the_service_unmodified(client: TestClient) -> None:
         "whitespace-code",
         "empty-language",
         "whitespace-language",
-        "missing-language",
+        "empty-filename",
+        "filename-too-long",
         "missing-code",
         "unknown-field",
         "code-too-long",
@@ -216,3 +220,56 @@ def test_health_is_never_rate_limited(client: TestClient) -> None:
     limiter.enabled = True
 
     assert all(client.get("/health").status_code == 200 for _ in range(50))
+
+
+# --- Language and filename are optional --------------------------------------
+
+
+def test_language_and_filename_are_both_optional(client: TestClient) -> None:
+    service = FakeService()
+    use_service(service)
+
+    response = client.post("/review", json={"code": "x = 1"})
+
+    assert response.status_code == 200
+    assert service.calls == [{"code": "x = 1", "language": None, "filename": None}]
+
+
+def test_filename_is_passed_through_to_the_service(client: TestClient) -> None:
+    service = FakeService()
+    use_service(service)
+
+    client.post("/review", json={"code": "x = 1", "filename": "  src/app.py  "})
+
+    assert service.calls == [{"code": "x = 1", "language": None, "filename": "src/app.py"}]
+
+
+def test_success_response_carries_rate_limit_headers(client: TestClient) -> None:
+    use_service(FakeService())
+    limiter.enabled = True
+
+    response = client.post("/review", json=VALID_BODY)
+
+    assert response.status_code == 200
+    assert response.headers["x-ratelimit-limit"] == "10"
+    assert response.headers["x-ratelimit-remaining"] == "9"
+    assert "x-ratelimit-reset" in response.headers
+
+
+def test_rate_limit_remaining_counts_down_then_429_carries_the_same_headers(
+    client: TestClient,
+) -> None:
+    use_service(FakeService())
+    limiter.enabled = True
+    allowed = int(settings.review_rate_limit.split("/")[0])
+
+    remaining = [
+        client.post("/review", json=VALID_BODY).headers["x-ratelimit-remaining"]
+        for _ in range(allowed)
+    ]
+    blocked = client.post("/review", json=VALID_BODY)
+
+    assert remaining == [str(n) for n in range(allowed - 1, -1, -1)]
+    assert blocked.status_code == 429
+    assert blocked.headers["x-ratelimit-remaining"] == "0"
+    assert blocked.headers["retry-after"].isdigit()

@@ -102,7 +102,8 @@ class PullRequestReviewService:
             return "not a recognized source-code file type"
         if not file.added_lines:
             return "no added or changed lines (only removals, a rename or a mode change)"
-        if sum(len(line.text) + 1 for line in file.added_lines) > MAX_CODE_CHARS:
+        # Measured on everything sent to the model, context included.
+        if sum(len(line.text) + 1 for line in file.lines) > MAX_CODE_CHARS:
             return f"changes too large to review (over {MAX_CODE_CHARS:,} characters)"
         return None
 
@@ -128,12 +129,15 @@ class PullRequestReviewService:
 
         async with semaphore:
             try:
-                # The added lines carry their REAL line numbers, so the model
-                # reads and reports true file line numbers directly. There is
-                # no translation step to get wrong. `excerpt=True` tells it it
-                # is seeing part of a file.
+                # Every line carries its REAL line number, so the model reads and
+                # reports true file line numbers directly, with no translation
+                # step to get wrong. The lines include unchanged context
+                # (flagged read-only) so the model can see how the changed code
+                # fits in; ReviewService then guarantees it only reports issues
+                # on the added lines. `excerpt=True` tells the model it is
+                # seeing part of a file.
                 review = await self._reviewer.review_lines(
-                    file.added_lines, language, excerpt=True
+                    file.lines, language, excerpt=True
                 )
             except ReviewError as exc:
                 logger.warning("Review of %s failed: %s", file.path, exc)

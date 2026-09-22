@@ -48,11 +48,28 @@ def test_number_lines_returns_line_objects_counting_from_one() -> None:
     assert number_lines("a\nb\n") == [NumberedLine(1, "a"), NumberedLine(2, "b")]
 
 
-def test_render_uses_each_lines_own_number_so_gaps_are_preserved() -> None:
-    """PR excerpts skip numbers; rendering must show the real ones, not 1..N."""
+def test_render_uses_each_lines_own_number_and_marks_gaps() -> None:
+    """PR excerpts skip numbers; rendering shows the real ones, with "..." at each gap."""
     lines = [NumberedLine(12, "x = 1"), NumberedLine(13, "y = 2"), NumberedLine(40, "z = 3")]
 
-    assert render_numbered_lines(lines) == "12: x = 1\n13: y = 2\n40: z = 3"
+    assert render_numbered_lines(lines) == "12: x = 1\n13: y = 2\n...\n40: z = 3"
+
+
+def test_context_lines_are_marked_and_added_lines_are_not() -> None:
+    lines = [
+        NumberedLine(9, "ctx_before", context=True),
+        NumberedLine(10, "added"),
+        NumberedLine(11, "ctx_after", context=True),
+    ]
+
+    assert render_numbered_lines(lines) == (
+        "[context] 9: ctx_before\n10: added\n[context] 11: ctx_after"
+    )
+
+
+def test_whole_file_numbering_never_produces_gap_markers_or_context() -> None:
+    assert "..." not in add_line_numbers("a\nb\nc\nd")
+    assert all(not line.context for line in number_lines("a\nb\nc"))
 
 
 def test_user_message_contains_language_and_numbered_code_in_tags() -> None:

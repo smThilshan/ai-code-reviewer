@@ -30,7 +30,7 @@ from app.services.exceptions import (
     LLMUnavailableError,
 )
 from app.services.line_numbering import NumberedLine
-from app.services.prompts import EXCERPT_NOTE, SYSTEM_PROMPT
+from app.services.prompts import EXCERPT_NOTE, UNKNOWN_LANGUAGE, build_system_prompt
 from app.services.review_service import MAX_OUTPUT_TOKENS, ReviewService
 
 REQUEST = httpx2.Request("POST", "https://api.openai.com/v1/chat/completions")
@@ -100,7 +100,7 @@ def test_sends_schema_prompt_and_line_numbered_code_to_the_model() -> None:
     assert kwargs["max_completion_tokens"] == MAX_OUTPUT_TOKENS
 
     system, user = kwargs["messages"]
-    assert system == {"role": "system", "content": SYSTEM_PROMPT}
+    assert system == {"role": "system", "content": build_system_prompt("python")}
     assert user["role"] == "user"
     assert "Language: python" in user["content"]
     assert "1: def foo():\n2:     pass" in user["content"]  # numbered, not raw
@@ -287,7 +287,7 @@ def test_excerpt_sends_real_line_numbers_and_the_excerpt_note() -> None:
     asyncio.run(service.review_lines(lines, "python", excerpt=True))
 
     user_message = parse.await_args.kwargs["messages"][1]["content"]
-    assert "10: a\n40: c" in user_message
+    assert "10: a\n...\n40: c" in user_message
     assert EXCERPT_NOTE in user_message
 
 
@@ -297,3 +297,156 @@ def test_whole_file_review_does_not_get_the_excerpt_note() -> None:
     review(service, code="a")
 
     assert EXCERPT_NOTE not in parse.await_args.kwargs["messages"][1]["content"]
+
+
+# --- Context lines: shown to the model, but never a valid place for an issue --
+
+
+def excerpt_with_context() -> list[NumberedLine]:
+    """Lines 8-9 context, 10-11 added, 12 context; then a gap; 40 added."""
+    return [
+        NumberedLine(8, "ctx8", context=True),
+        NumberedLine(9, "ctx9", context=True),
+        NumberedLine(10, "added10"),
+        NumberedLine(11, "added11"),
+        NumberedLine(12, "ctx12", context=True),
+        NumberedLine(40, "added40"),
+    ]
+
+
+def test_issue_on_a_context_line_is_dropped() -> None:
+    service, _ = make_service(reply_citing_lines(9, 10, 12))
+
+    result = asyncio.run(service.review_lines(excerpt_with_context(), "python", excerpt=True))
+
+    assert cited_lines(result) == [10]
+
+
+def test_issues_on_added_lines_and_null_lines_survive_alongside_dropped_ones() -> None:
+    service, _ = make_service(reply_citing_lines(8, 11, None, 40))
+
+    result = asyncio.run(service.review_lines(excerpt_with_context(), "python", excerpt=True))
+
+    assert cited_lines(result) == [11, None, 40]
+
+
+def test_line_never_shown_is_nulled_while_a_context_line_is_dropped() -> None:
+    """Two different violations get two different treatments."""
+    service, _ = make_service(reply_citing_lines(25, 9))
+
+    result = asyncio.run(service.review_lines(excerpt_with_context(), "python", excerpt=True))
+
+    assert cited_lines(result) == [None]  # 25 nulled (kept); 9 dropped
+
+
+def test_context_lines_are_marked_read_only_in_the_prompt_sent_to_the_model() -> None:
+    service, parse = make_service(reply_citing_lines(10))
+
+    asyncio.run(service.review_lines(excerpt_with_context(), "python", excerpt=True))
+
+    user_message = parse.await_args.kwargs["messages"][1]["content"]
+    assert "[context] 9: ctx9\n10: added10" in user_message
+    assert "READ-ONLY" in user_message
+
+
+def test_whole_file_review_is_unaffected_by_the_context_rule() -> None:
+    service, _ = make_service(reply_citing_lines(1, 2))
+
+    result = review(service, code="a\nb")
+
+    assert cited_lines(result) == [1, 2]
+
+
+# --- Language resolution --------------------------------------------------------
+
+
+def language_line_sent(parse: AsyncMock) -> str:
+    """The "Language: ..." line of the user message the model was sent."""
+    user_message = parse.await_args.kwargs["messages"][1]["content"]
+    return user_message.splitlines()[0]
+
+
+def test_explicit_language_is_normalized_before_reaching_the_model() -> None:
+    service, parse = make_service(completion_with(json.dumps(GOOD_REPLY)))
+
+    asyncio.run(service.review_code(code="x", language="JS"))
+
+    assert language_line_sent(parse) == "Language: javascript"
+
+
+def test_language_is_inferred_from_filename_when_not_given() -> None:
+    service, parse = make_service(completion_with(json.dumps(GOOD_REPLY)))
+
+    asyncio.run(service.review_code(code="x", filename="cmd/main.go"))
+
+    assert language_line_sent(parse) == "Language: go"
+
+
+def test_explicit_language_beats_filename() -> None:
+    service, parse = make_service(completion_with(json.dumps(GOOD_REPLY)))
+
+    asyncio.run(service.review_code(code="x", language="python", filename="a.js"))
+
+    assert language_line_sent(parse) == "Language: python"
+
+
+def test_model_is_asked_to_identify_the_language_when_it_is_unknown() -> None:
+    service, parse = make_service(completion_with(json.dumps(GOOD_REPLY)))
+
+    asyncio.run(service.review_code(code="x"))
+    unknown_from_nothing = language_line_sent(parse)
+    asyncio.run(service.review_code(code="x", filename="README.md"))
+    unknown_from_extension = language_line_sent(parse)
+
+    assert unknown_from_nothing == unknown_from_extension == f"Language: {UNKNOWN_LANGUAGE}"
+
+
+# --- Per-language system prompt notes (Phase 7: adopted from the Phase 6 eval) --
+
+
+def system_content_sent(parse: AsyncMock) -> str:
+    return parse.await_args.kwargs["messages"][0]["content"]
+
+
+@pytest.mark.parametrize("language", ["python", "javascript", "typescript", "java", "go", "c", "c++"])
+def test_known_languages_get_their_note_appended_after_the_shared_rubric(language: str) -> None:
+    service, parse = make_service(completion_with(json.dumps(GOOD_REPLY)))
+
+    asyncio.run(service.review_code(code="x", language=language))
+
+    system = system_content_sent(parse)
+    expected = build_system_prompt(language)
+    assert system == expected
+    assert system.startswith(build_system_prompt(None))  # the shared rubric is an unbroken prefix
+    assert "LANGUAGE-SPECIFIC THINGS TO CHECK" in system
+
+
+@pytest.mark.parametrize("language", [None, "haskell", "elixir"])
+def test_unlisted_languages_get_the_plain_rubric_with_no_note(language: str | None) -> None:
+    service, parse = make_service(completion_with(json.dumps(GOOD_REPLY)))
+
+    asyncio.run(service.review_code(code="x", language=language))
+
+    assert "LANGUAGE-SPECIFIC THINGS TO CHECK" not in system_content_sent(parse)
+
+
+def test_language_note_is_looked_up_by_the_normalized_language_not_the_raw_alias() -> None:
+    """'js' and 'javascript' must reach the model with the identical prompt."""
+    service, parse = make_service(completion_with(json.dumps(GOOD_REPLY)))
+
+    asyncio.run(service.review_code(code="x", language="js"))
+    from_alias = system_content_sent(parse)
+    asyncio.run(service.review_code(code="x", language="javascript"))
+    from_canonical = system_content_sent(parse)
+
+    assert from_alias == from_canonical
+
+
+def test_pr_excerpt_review_also_gets_the_language_note() -> None:
+    service, parse = make_service(reply_citing_lines(1))
+
+    asyncio.run(
+        service.review_lines([NumberedLine(1, "x")], "go", excerpt=True)
+    )
+
+    assert "LANGUAGE-SPECIFIC THINGS TO CHECK" in system_content_sent(parse)

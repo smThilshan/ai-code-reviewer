@@ -16,11 +16,16 @@ from slowapi.errors import RateLimitExceeded
 from app.config import settings  # noqa: F401
 from app.rate_limit import limiter, rate_limit_exceeded_handler
 from app.routers import pull_requests, review
+from app.schemas.health import HealthDetail, RateLimits
+
+# Single source of truth for the app's version, so FastAPI's own metadata
+# (shown in /docs) and the /health/detailed payload can't drift apart.
+APP_VERSION = "0.1.0"
 
 app = FastAPI(
     title="AI Code Reviewer",
     description="An AI-powered code review service.",
-    version="0.1.0",
+    version=APP_VERSION,
 )
 
 # slowapi looks the limiter up on app.state, and needs a handler to turn its
@@ -36,3 +41,29 @@ app.include_router(pull_requests.router)
 def health_check() -> dict[str, str]:
     """Liveness check used to confirm the service is running."""
     return {"status": "ok"}
+
+
+@app.get(
+    "/health/detailed",
+    summary="Configuration and readiness snapshot",
+    tags=["health"],
+)
+def health_detailed() -> HealthDetail:
+    """A demo/debugging view of how this instance is configured.
+
+    Reads only local settings — it never calls OpenAI or GitHub — so it's
+    safe to hit as often as a demo UI wants without costing anything or
+    slowing anything down. See HealthDetail's docstring for what that means
+    for `openai_configured`.
+    """
+    return HealthDetail(
+        status="ok",
+        version=APP_VERSION,
+        openai_model=settings.openai_model,
+        openai_configured=bool(settings.openai_api_key),
+        github_token_configured=settings.github_token is not None,
+        rate_limits=RateLimits(
+            review=settings.review_rate_limit,
+            review_pr=settings.review_pr_rate_limit,
+        ),
+    )

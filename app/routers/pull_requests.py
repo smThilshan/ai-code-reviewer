@@ -6,7 +6,7 @@ maps its domain errors to HTTP status codes.
 
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
 
 from app.config import settings
 from app.dependencies import get_pull_request_review_service
@@ -66,6 +66,7 @@ def _status_for(exc: Exception) -> int:
 @limiter.limit(settings.review_pr_rate_limit)
 async def review_pull_request(
     request: Request,  # required by slowapi; see routers/review.py
+    response: Response,  # required for slowapi's rate-limit headers; see routers/review.py
     payload: Annotated[PullRequestReviewRequest, Body(openapi_examples=PR_REVIEW_REQUEST_EXAMPLES)],
     service: Annotated[PullRequestReviewService, Depends(get_pull_request_review_service)],
 ) -> PullRequestReviewResponse:

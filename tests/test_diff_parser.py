@@ -39,7 +39,7 @@ def test_added_lines_get_new_file_line_numbers_and_context_advances_the_counter(
     (file,) = parse_diff(diff)
 
     assert file.path == "app/foo.py"
-    assert [(l.number, l.text) for l in file.added_lines] == [
+    assert [(line.number, line.text) for line in file.added_lines] == [
         (11, "    total = compute()"),
         (12, "    return total"),
     ]
@@ -113,7 +113,7 @@ def test_new_file_is_numbered_from_one() -> None:
     (file,) = parse_diff(diff)
 
     assert file.path == "new.py"
-    assert [(l.number, l.text) for l in file.added_lines] == [(1, "first"), (2, "second"), (3, "third")]
+    assert [(line.number, line.text) for line in file.added_lines] == [(1, "first"), (2, "second"), (3, "third")]
 
 
 # --- Traps -------------------------------------------------------------------
@@ -135,7 +135,7 @@ def test_header_lookalike_lines_inside_a_hunk_are_content_not_headers() -> None:
     (file,) = parse_diff(diff)
 
     assert file.path == "q.sql"  # not overwritten by the "+++ a line..." content
-    assert [(l.number, l.text) for l in file.added_lines] == [(2, "++ a line that was added")]
+    assert [(line.number, line.text) for line in file.added_lines] == [(2, "++ a line that was added")]
 
 
 def test_diff_git_lookalike_inside_a_hunk_does_not_start_a_new_file() -> None:
@@ -300,7 +300,7 @@ def test_rename_with_edits_reports_lines_against_the_new_path() -> None:
     (file,) = parse_diff(diff)
 
     assert file.path == "new_name.py"
-    assert [(l.number, l.text) for l in file.added_lines] == [(2, "b")]
+    assert [(line.number, line.text) for line in file.added_lines] == [(2, "b")]
 
 
 def test_binary_file_is_flagged_and_gets_its_path_from_the_diff_header() -> None:
@@ -372,3 +372,89 @@ def test_added_lines_carry_numberedline_objects() -> None:
     )
 
     assert parse_diff(diff)[0].added_lines == (NumberedLine(1, "x"),)
+
+
+# --- Context lines ------------------------------------------------------------
+
+
+def test_context_lines_are_kept_with_real_numbers_and_flagged_in_file_order() -> None:
+    diff = make_diff(
+        "diff --git a/f.py b/f.py",
+        "--- a/f.py",
+        "+++ b/f.py",
+        "@@ -10,4 +10,5 @@",
+        " ctx10",
+        "-removed",
+        "+added11",
+        "+added12",
+        " ctx13",
+        " ctx14",
+    )
+
+    (file,) = parse_diff(diff)
+
+    assert [(line.number, line.text, line.context) for line in file.lines] == [
+        (10, "ctx10", True),
+        (11, "added11", False),
+        (12, "added12", False),
+        (13, "ctx13", True),
+        (14, "ctx14", True),
+    ]
+    # `added_lines` is the same data with context filtered out.
+    assert [(line.number, line.text) for line in file.added_lines] == [(11, "added11"), (12, "added12")]
+
+
+def test_removed_lines_appear_nowhere_in_the_lines() -> None:
+    diff = make_diff(
+        "diff --git a/f.py b/f.py",
+        "--- a/f.py",
+        "+++ b/f.py",
+        "@@ -1,3 +1,2 @@",
+        " keep",
+        "-DELETED_LINE",
+        " also keep",
+    )
+
+    (file,) = parse_diff(diff)
+
+    assert all("DELETED_LINE" not in line.text for line in file.lines)
+    assert [line.number for line in file.lines] == [1, 2]  # numbering closes over the removal
+
+
+def test_separate_hunks_leave_a_gap_in_the_numbers() -> None:
+    diff = make_diff(
+        "diff --git a/f.py b/f.py",
+        "--- a/f.py",
+        "+++ b/f.py",
+        "@@ -1,1 +1,2 @@",
+        " a",
+        "+A",
+        "@@ -50,1 +51,2 @@",
+        " y",
+        "+Y",
+    )
+
+    (file,) = parse_diff(diff)
+
+    assert [line.number for line in file.lines] == [1, 2, 51, 52]
+
+
+def test_blank_context_line_is_kept_as_an_empty_context_line() -> None:
+    diff = make_diff(
+        "diff --git a/f.py b/f.py",
+        "--- a/f.py",
+        "+++ b/f.py",
+        "@@ -1,3 +1,3 @@",
+        " a",
+        "",
+        "-b",
+        "+c",
+    )
+
+    (file,) = parse_diff(diff)
+
+    assert [(line.number, line.text, line.context) for line in file.lines] == [
+        (1, "a", True),
+        (2, "", True),
+        (3, "c", False),
+    ]

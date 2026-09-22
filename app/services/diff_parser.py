@@ -1,4 +1,4 @@
-"""Parse a unified diff and extract the lines each file *added*.
+"""Parse a unified diff into, per file, the lines it added plus nearby context.
 
 Anatomy of a unified diff (what GitHub returns for a pull request):
 
@@ -26,6 +26,12 @@ counter at the new-file start (10) and walk the hunk:
   - context line  -> it exists in the new file: counter += 1
   - added line    -> it exists in the new file: record (counter, text); counter += 1
   - removed line  -> it does NOT exist in the new file: counter is unchanged
+
+We keep both kinds of line that exist in the new file, in order: the added
+ones (what the PR changed, and what gets reviewed) and the unchanged context
+ones (which the reviewer may read for understanding but must not report on).
+Each carries its real line number and a `context` flag. Removed lines are
+dropped: they no longer exist, so there's nothing to review or number.
 
 That counter is the line number an editor would show for the file at the PR's
 head commit. It is NOT the diff's own numbering (position within the diff
@@ -58,11 +64,21 @@ class FileDiff:
     path: str
     """Path of the file in the new version (or the old one, if deleted)."""
 
-    added_lines: tuple[NumberedLine, ...]
-    """Lines added or changed, each with its real line number in the new file."""
+    lines: tuple[NumberedLine, ...]
+    """Added and context lines, in file order, with real new-file line numbers.
+
+    Context lines are the few unchanged lines git includes around each change
+    (three by default). They give the reviewer a view of the code around the
+    edit without another trip to GitHub.
+    """
 
     is_binary: bool = False
     is_deleted: bool = False
+
+    @property
+    def added_lines(self) -> tuple[NumberedLine, ...]:
+        """Only the lines the pull request added or changed."""
+        return tuple(line for line in self.lines if not line.context)
 
 
 @dataclass
@@ -75,7 +91,7 @@ class _FileBuilder:
     renamed_to: str | None = None
     is_binary: bool = False
     is_deleted: bool = False
-    added: list[NumberedLine] = field(default_factory=list)
+    lines: list[NumberedLine] = field(default_factory=list)
 
     def build(self) -> FileDiff:
         # Best source of the path first: "+++ b/x", then "rename to", then the
@@ -84,7 +100,7 @@ class _FileBuilder:
         path = self.new_path or self.renamed_to or self.old_path or self.header_path
         return FileDiff(
             path=path,
-            added_lines=tuple(self.added),
+            lines=tuple(self.lines),
             is_binary=self.is_binary,
             is_deleted=self.is_deleted,
         )
@@ -109,7 +125,7 @@ def parse_diff(diff_text: str) -> list[FileDiff]:
             marker, text = raw[:1], raw[1:]
             if marker == "+":
                 assert current is not None
-                current.added.append(NumberedLine(new_line, text.removesuffix("\r")))
+                current.lines.append(NumberedLine(new_line, text.removesuffix("\r")))
                 new_line += 1
                 new_left -= 1
             elif marker == "-":
@@ -119,6 +135,10 @@ def parse_diff(diff_text: str) -> list[FileDiff]:
             else:
                 # ' ' context. An entirely empty line also counts, because some
                 # tools strip the single trailing space off blank context lines.
+                assert current is not None
+                current.lines.append(
+                    NumberedLine(new_line, text.removesuffix("\r"), context=True)
+                )
                 old_left -= 1
                 new_left -= 1
                 new_line += 1

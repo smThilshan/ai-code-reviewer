@@ -8,7 +8,7 @@ domain errors into HTTP status codes. All actual review logic lives in
 
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
 
 from app.config import settings
 from app.dependencies import get_review_service
@@ -42,12 +42,20 @@ async def create_review(
     # slowapi finds the client IP through a parameter named exactly `request`
     # holding the Starlette Request, which is why the body is called `payload`.
     request: Request,
+    # Unused directly: FastAPI injects the outgoing Response so headers set on
+    # it are merged into the real response. slowapi needs this exact
+    # parameter name to attach its X-RateLimit-*/Retry-After headers on a
+    # successful (non-429) response — without it, headers_enabled=True raises
+    # instead of just doing nothing, since it can't find anywhere to put them.
+    response: Response,
     payload: Annotated[ReviewRequest, Body(openapi_examples=REVIEW_REQUEST_EXAMPLES)],
     service: Annotated[ReviewService, Depends(get_review_service)],
 ) -> ReviewResponse:
     """Analyze the submitted code and return structured review findings."""
     try:
-        return await service.review_code(code=payload.code, language=payload.language)
+        return await service.review_code(
+            code=payload.code, language=payload.language, filename=payload.filename
+        )
     except LLMTimeoutError as exc:
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=str(exc)

@@ -50,6 +50,90 @@ REVIEW_REQUEST_EXAMPLES: dict[str, dict[str, Any]] = {
             ),
         },
     },
+    "javascript_sqli_async": {
+        "summary": "JavaScript (expect: SQL injection on line 4, forEach(async) bug on line 10)",
+        "value": {
+            "language": "javascript",
+            "code": (
+                "const express = require('express');\n"
+                "const app = express();\n"
+                "app.get('/user', (req, res) => {\n"
+                "  const q = \"SELECT * FROM users WHERE name = '\" + req.query.name + \"'\";\n"
+                "  db.query(q, (err, rows) => res.send(rows));\n"
+                "});\n"
+                "\n"
+                "async function loadAll(ids) {\n"
+                "  const out = [];\n"
+                "  ids.forEach(async (id) => {\n"
+                "    out.push(await fetchItem(id));\n"
+                "  });\n"
+                "  return out;\n"
+                "}\n"
+            ),
+        },
+    },
+    "go_ignored_errors": {
+        "summary": "Go (expect: unchecked Scan on line 6, ignored os.Open error on line 12, both bug)",
+        "value": {
+            "language": "go",
+            "code": (
+                "package main\n"
+                "\n"
+                "func getEmail(db *sql.DB, id int) string {\n"
+                "    row := db.QueryRow(\"SELECT email FROM users WHERE id = ?\", id)\n"
+                "    var email string\n"
+                "    row.Scan(&email)\n"
+                "    return email\n"
+                "}\n"
+                "\n"
+                "func readConfig(path string) []byte {\n"
+                "    buf := make([]byte, 1024)\n"
+                "    f, _ := os.Open(path)\n"
+                "    f.Read(buf)\n"
+                "    return buf\n"
+                "}\n"
+            ),
+        },
+    },
+    "c_memory_safety": {
+        "summary": "C (expect: strcpy overflow on line 3 and printf(msg) format-string bug on line 8, both security)",
+        "value": {
+            "language": "c",
+            "code": (
+                "void greet(const char *name) {\n"
+                "    char buf[16];\n"
+                "    strcpy(buf, name);\n"
+                "    printf(\"Hello, %s\\n\", buf);\n"
+                "}\n"
+                "\n"
+                "void log_message(const char *msg) {\n"
+                "    printf(msg);\n"
+                "}\n"
+            ),
+        },
+    },
+    "language_from_filename": {
+        "summary": "No `language`, only `filename` (expect: Java inferred; string == on line 3)",
+        "value": {
+            "filename": "src/main/java/AuthService.java",
+            "code": (
+                "public class AuthService {\n"
+                "    public boolean isAdmin(String role) {\n"
+                "        return role == \"admin\";\n"
+                "    }\n"
+                "}\n"
+            ),
+        },
+    },
+    "language_unknown": {
+        "summary": "Neither `language` nor `filename` (the model identifies the language itself)",
+        "value": {
+            "code": (
+                "def average(values):\n"
+                "    return sum(values) / len(values)\n"
+            ),
+        },
+    },
     "clean_code": {
         "summary": "Control: clean code (expect: no issues, or only trivial ones)",
         "value": {
@@ -72,6 +156,10 @@ PR_REVIEW_REQUEST_EXAMPLES: dict[str, dict[str, Any]] = {
     "code_pr": {
         "summary": "Real PR: code + tests + changelog (expect: 2 files reviewed, CHANGES.rst skipped)",
         "value": {"pr_url": "https://github.com/pallets/click/pull/3493"},
+    },
+    "multi_language_pr": {
+        "summary": "Real PR touching Python + TypeScript + JSON (expect: .py/.ts reviewed in their own language, .json skipped)",
+        "value": {"pr_url": "https://github.com/microsoft/vscode-python/pull/26134"},
     },
     "docs_only_pr": {
         "summary": "Docs-only PR (expect: 422, no code changes to review)",

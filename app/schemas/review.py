@@ -128,8 +128,22 @@ class ReviewRequest(BaseModel):
     )
     language: Annotated[
         str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)
-    ] = Field(
-        description="Programming language of the code, e.g. 'python'. A hint only."
+    ] | None = Field(
+        default=None,
+        description=(
+            "Programming language of the code, e.g. 'python' or 'js'. Optional: "
+            "if omitted, it is inferred from `filename`, or failing that the "
+            "model identifies it from the code."
+        ),
+    )
+    filename: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=260)
+    ] | None = Field(
+        default=None,
+        description=(
+            "Optional file name or path, e.g. 'app/main.py'. Used only to infer "
+            "the language from its extension when `language` isn't given."
+        ),
     )
 
     @field_validator("code")

@@ -322,3 +322,60 @@ def test_reviews_run_in_parallel_but_never_exceed_the_concurrency_cap() -> None:
     review(diff, reviewer)
 
     assert 1 < reviewer.max_running <= MAX_CONCURRENT_REVIEWS
+
+
+# --- Context lines -------------------------------------------------------------
+
+DIFF_WITH_CONTEXT = "\n".join(
+    [
+        "diff --git a/src/app.py b/src/app.py",
+        "--- a/src/app.py",
+        "+++ b/src/app.py",
+        "@@ -40,3 +40,4 @@",
+        " before",
+        "-old",
+        "+new_a",
+        "+new_b",
+        " after",
+        "",
+    ]
+)
+
+
+def test_reviewer_receives_context_lines_flagged_alongside_the_added_ones() -> None:
+    reviewer = FakeReviewer()
+
+    review(DIFF_WITH_CONTEXT, reviewer)
+
+    (call,) = reviewer.calls
+    assert call["lines"] == [
+        NumberedLine(40, "before", context=True),
+        NumberedLine(41, "new_a"),
+        NumberedLine(42, "new_b"),
+        NumberedLine(43, "after", context=True),
+    ]
+
+
+def test_lines_reviewed_counts_only_added_lines_not_context() -> None:
+    result = review(DIFF_WITH_CONTEXT)
+
+    assert result.files[0].lines_reviewed == 2
+
+
+def test_a_file_whose_only_lines_are_context_has_nothing_to_review() -> None:
+    """A diff can show context with no additions (pure deletions); that's not reviewable."""
+    diff = "\n".join(
+        [
+            "diff --git a/a.py b/a.py",
+            "--- a/a.py",
+            "+++ b/a.py",
+            "@@ -1,3 +1,2 @@",
+            " keep",
+            "-gone",
+            " keep2",
+            "",
+        ]
+    )
+
+    with pytest.raises(NoReviewableChangesError, match="no added"):
+        review(diff)

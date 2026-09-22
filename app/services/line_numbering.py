@@ -22,12 +22,25 @@ from dataclasses import dataclass
 _LINE_BREAK = re.compile(r"\r\n|\r|\n")
 
 
+# Marker prefixed to context lines in the prompt. Kept as one constant so the
+# rendering and the instructions to the model (see prompts.EXCERPT_NOTE) can't
+# drift apart.
+CONTEXT_MARKER = "[context]"
+
+
 @dataclass(frozen=True, slots=True)
 class NumberedLine:
     """One line of source and its 1-based line number in the original file."""
 
     number: int
     text: str
+
+    context: bool = False
+    """True for unchanged lines shown only to help understand nearby code.
+
+    The model may read them but must not report issues on them. Whole-file
+    review never uses this; it exists for pull-request excerpts.
+    """
 
 
 def number_lines(code: str) -> list[NumberedLine]:
@@ -48,8 +61,21 @@ def number_lines(code: str) -> list[NumberedLine]:
 
 
 def render_numbered_lines(lines: Iterable[NumberedLine]) -> str:
-    """Format lines as "N: text", one per row, using each line's own number."""
-    return "\n".join(f"{line.number}: {line.text}" for line in lines)
+    """Format lines as "N: text", one per row, using each line's own number.
+
+    Context lines get a "[context]" prefix. Where numbers skip (code that was
+    left out between two shown regions) a "..." row marks the gap, so the model
+    doesn't mistake two distant regions for adjacent code.
+    """
+    rows: list[str] = []
+    previous: int | None = None
+    for line in lines:
+        if previous is not None and line.number != previous + 1:
+            rows.append("...")
+        prefix = f"{CONTEXT_MARKER} " if line.context else ""
+        rows.append(f"{prefix}{line.number}: {line.text}")
+        previous = line.number
+    return "\n".join(rows)
 
 
 def add_line_numbers(code: str) -> str:
