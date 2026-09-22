@@ -58,6 +58,22 @@ class Settings:
         self.review_rate_limit: str = os.getenv("REVIEW_RATE_LIMIT", "10/minute;100/hour")
         self.review_pr_rate_limit: str = os.getenv("REVIEW_PR_RATE_LIMIT", "5/minute;30/hour")
 
+        # Origins allowed to call this API from a browser (Phase 8: the React
+        # frontend). Needed because the frontend calls this API via an
+        # absolute URL on a different origin, never a same-origin relative
+        # path — that's a real cross-origin browser request, which every
+        # browser blocks unless the server explicitly allows it via CORS.
+        # This is a browser-only restriction: curl, server-to-server calls
+        # and the test suite are never subject to it, so this setting
+        # changes nothing for them. Defaults to Vite's default dev port so
+        # local dev works with zero configuration; set it to the deployed
+        # frontend's real origin in production.
+        self.cors_allowed_origins: list[str] = [
+            origin.strip()
+            for origin in os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:5173").split(",")
+            if origin.strip()
+        ]
+
 
 # A single shared instance, imported wherever settings are needed:
 #   from app.config import settings

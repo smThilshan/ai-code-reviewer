@@ -1,0 +1,16 @@
+@import "tailwindcss";
+
+/*
+ * Tailwind v4 is CSS-first: no tailwind.config.js. `@theme` is the only
+ * customization this restrained UI needs — one accent color, used for
+ * primary buttons, the active mode toggle, and focus rings.
+ */
+@theme {
+  --color-accent-50: oklch(0.97 0.014 268);
+  --color-accent-600: oklch(0.51 0.19 268);
+  --color-accent-700: oklch(0.44 0.19 268);
+}
+
+body {
+  @apply bg-slate-50 text-slate-900 antialiased;
+}

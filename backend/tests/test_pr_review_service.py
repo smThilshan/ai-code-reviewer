@@ -9,6 +9,7 @@ import asyncio
 
 import pytest
 
+from app.schemas.pull_request import ExcerptLine
 from app.schemas.review import MAX_CODE_CHARS, Category, ReviewIssue, ReviewResponse, Severity
 from app.services.exceptions import (
     InvalidPullRequestURLError,
@@ -360,6 +361,32 @@ def test_lines_reviewed_counts_only_added_lines_not_context() -> None:
     result = review(DIFF_WITH_CONTEXT)
 
     assert result.files[0].lines_reviewed == 2
+
+
+def test_excerpt_carries_every_shown_line_with_its_context_flag() -> None:
+    """excerpt exposes exactly what the model was shown (Phase 8: powers the frontend's code preview)."""
+    result = review(DIFF_WITH_CONTEXT)
+
+    excerpt = result.files[0].excerpt
+    assert [(line.line_number, line.text, line.is_context) for line in excerpt] == [
+        (40, "before", True),
+        (41, "new_a", False),
+        (42, "new_b", False),
+        (43, "after", True),
+    ]
+
+
+def test_excerpt_is_present_even_when_the_files_review_fails() -> None:
+    """A failed file still has real code worth previewing."""
+    reviewer = FakeReviewer(fail_on={"BAD": LLMResponseError("model returned junk")})
+    diff = file_diff("a.py", (1, "ok")) + file_diff("b.py", (1, "BAD"))
+
+    result = review(diff, reviewer)
+
+    failed = next(f for f in result.files if f.path == "b.py")
+    assert failed.error is not None
+    assert failed.review is None
+    assert failed.excerpt == [ExcerptLine(line_number=1, text="BAD")]
 
 
 def test_a_file_whose_only_lines_are_context_has_nothing_to_review() -> None:

@@ -8,6 +8,7 @@ across the remaining phases.
 """
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from slowapi.errors import RateLimitExceeded
 
 # Importing settings here ensures config validation (see app/config.py)
@@ -26,6 +27,19 @@ app = FastAPI(
     title="AI Code Reviewer",
     description="An AI-powered code review service.",
     version=APP_VERSION,
+)
+
+# Lets the frontend (a different origin — the Vite dev server, or a deployed
+# domain of its own) call this API from a browser. See Settings.
+# cors_allowed_origins for why this is needed at all. Kept minimal: only the
+# methods and header this API's endpoints actually use, and no credentials
+# (nothing here uses cookies or browser-stored auth).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_allowed_origins,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+    allow_credentials=False,
 )
 
 # slowapi looks the limiter up on app.state, and needs a handler to turn its

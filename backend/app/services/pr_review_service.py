@@ -12,7 +12,7 @@ ReviewService and is reused as-is, so a fix there improves both endpoints.
 import asyncio
 import logging
 
-from app.schemas.pull_request import FileReview, PullRequestReviewResponse, SkippedFile
+from app.schemas.pull_request import ExcerptLine, FileReview, PullRequestReviewResponse, SkippedFile
 from app.schemas.review import MAX_CODE_CHARS
 from app.services.diff_parser import FileDiff, parse_diff
 from app.services.exceptions import NoReviewableChangesError, ReviewError
@@ -125,7 +125,20 @@ class PullRequestReviewService:
         the others (gather would otherwise propagate the first exception).
         """
         language = language_for_path(file.path) or "text"
-        base = {"path": file.path, "language": language, "lines_reviewed": len(file.added_lines)}
+        # Exposed as-is to the frontend (see FileReview.excerpt's docstring) so
+        # it can show a code preview without fetching or storing whole files.
+        # Kept on both the success AND failure path below: even a file whose
+        # review failed still has real lines worth showing.
+        excerpt = [
+            ExcerptLine(line_number=line.number, text=line.text, is_context=line.context)
+            for line in file.lines
+        ]
+        base = {
+            "path": file.path,
+            "language": language,
+            "lines_reviewed": len(file.added_lines),
+            "excerpt": excerpt,
+        }
 
         async with semaphore:
             try:

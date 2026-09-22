@@ -17,6 +17,23 @@ class PullRequestReviewRequest(BaseModel):
     )
 
 
+class ExcerptLine(BaseModel):
+    """One line shown to the model for this file: an added line, or read-only context.
+
+    This is exactly what ReviewService was given (see
+    app.services.pr_review_service._review_one), exposed as-is rather than
+    re-fetched, so a frontend can show the code a finding refers to without
+    a second round trip or storing whole files.
+    """
+
+    line_number: int
+    text: str
+    is_context: bool = Field(
+        default=False,
+        description="True for unchanged lines shown only for context; false for lines the PR added or changed.",
+    )
+
+
 class FileReview(BaseModel):
     """The review of one changed file."""
 
@@ -34,6 +51,9 @@ class FileReview(BaseModel):
     )
     error: str | None = Field(
         description="Why this file could not be reviewed, if it couldn't."
+    )
+    excerpt: list[ExcerptLine] = Field(
+        description="The lines sent to the model for this file, in file order."
     )
 
 

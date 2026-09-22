@@ -10,7 +10,7 @@ from app.dependencies import get_pull_request_review_service, get_review_service
 from app.main import app
 from app.rate_limit import limiter
 from app.schemas.examples import PR_REVIEW_REQUEST_EXAMPLES
-from app.schemas.pull_request import FileReview, PullRequestReviewResponse, SkippedFile
+from app.schemas.pull_request import ExcerptLine, FileReview, PullRequestReviewResponse, SkippedFile
 from app.schemas.review import Category, ReviewIssue, ReviewResponse, Severity
 from app.services.exceptions import (
     GitHubAccessDeniedError,
@@ -47,6 +47,7 @@ CANNED = PullRequestReviewResponse(
                 summary="s",
             ),
             error=None,
+            excerpt=[ExcerptLine(line_number=212, text="    return 1", is_context=False)],
         )
     ],
     skipped_files=[SkippedFile(path="CHANGES.rst", reason="not a recognized source-code file type")],
@@ -86,6 +87,9 @@ def test_success_returns_files_and_skipped_files(client: TestClient) -> None:
     assert body["pull_request"] == BODY["pr_url"]
     assert body["files"][0]["path"] == "src/click/utils.py"
     assert body["files"][0]["review"]["issues"][0]["line_number"] == 212
+    assert body["files"][0]["excerpt"] == [
+        {"line_number": 212, "text": "    return 1", "is_context": False}
+    ]
     assert body["skipped_files"] == [
         {"path": "CHANGES.rst", "reason": "not a recognized source-code file type"}
     ]
